@@ -602,27 +602,23 @@ public class SQLRelationship extends SQLObject implements java.io.Serializable {
 				for (SQLColumn pkCol : pkColListCopy) {
 					if (!pkCol.isPrimaryKey()) break;
 
-					SQLColumn match = fkTable.getColumnByName(pkCol.getName());
+					String preferredFkColName = pkCol.getParent().getName() + "_" + pkCol.getName();
+					SQLColumn match = fkTable.getColumnByName(preferredFkColName);
 					SQLColumn fkCol = new SQLColumn(pkCol);
                     if (getParent() == fkTable) {
                         // self-reference should never hijack the PK!
                         String colName = "Parent_" + fkCol.getName();
                         fkCol.setName(generateUniqueColumnName(colName, fkTable));
                         setIdentifying(false);
-                    } else if (match == null) { 
-                        // no match, so we need to import this column from PK table
-                        fkCol.setName(generateUniqueColumnName(pkCol.getName(),fkTable));
+                    } else if (match != null && !alreadyExists &&
+                            match.getType() == pkCol.getType() &&
+                            match.getPrecision() == pkCol.getPrecision() &&
+                            match.getScale() == pkCol.getScale()) {
+                        // tablename_id already exists with a compatible type — reuse it
+                        fkCol = match;
                     } else {
-						// does the matching column have a compatible data type?
-						if (!alreadyExists && match.getType() == pkCol.getType() &&
-								match.getPrecision() == pkCol.getPrecision() &&
-								match.getScale() == pkCol.getScale()) {
-							// column is an exact match, so we don't have to recreate it
-							fkCol = match;
-						} else {
-						    String colName = pkCol.getParent().getName() + "_" + pkCol.getName();
-							fkCol.setName(generateUniqueColumnName(colName,fkTable));
-						}
+                        // create a new FK column named tablename_id
+                        fkCol.setName(generateUniqueColumnName(preferredFkColName, fkTable));
                     }
 					this.addMapping(pkCol, fkCol);
 
