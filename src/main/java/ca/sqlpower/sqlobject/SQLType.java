@@ -31,6 +31,11 @@ public class SQLType {
 	public static final int NCHAR = -15;
 	public static final int NCLOB = 2011;
 
+	// JSON types (SQL:2016 and PostgreSQL extensions)
+	public static final int JSON = -200;
+	public static final int JSONB = -201;
+	public static final int JSONPATH = -202;
+
     /**
      * The official set of types.
      */
@@ -67,7 +72,11 @@ public class SQLType {
 		// Types from JDBC 4.0
 		new SQLType("NVARCHAR", NVARCHAR),
 		new SQLType("NCHAR", NCHAR),
-		new SQLType("NCLOB", NCLOB)
+		new SQLType("NCLOB", NCLOB),
+		// JSON types (SQL:2016 / PostgreSQL)
+		new SQLType("JSON", JSON),
+		new SQLType("JSONB", JSONB),
+		new SQLType("JSONPATH", JSONPATH)
     };
     
 	/**

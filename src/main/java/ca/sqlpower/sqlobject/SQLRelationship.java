@@ -446,10 +446,43 @@ public class SQLRelationship extends SQLObject implements java.io.Serializable {
 	    int count = 1;
 	    String uniqueName;
 	    do {
-	        uniqueName = colName + "_" + count; 
+	        uniqueName = colName + "_" + count;
 	        count++;
 	    } while (table.getColumnByName(uniqueName) != null);
 	    return uniqueName;
+	}
+
+	/**
+	 * Converts a table name to its singular form for use as a FK column name prefix.
+	 * Handles common English plural patterns:
+	 * <ul>
+	 *   <li>"ies" endings → "y" (e.g. "categories" → "category")</li>
+	 *   <li>"ses", "xes", "zes", "ches", "shes" endings → remove "es" (e.g. "boxes" → "box")</li>
+	 *   <li>"s" endings (but not "ss", "us", "is", or already-singular words) → remove "s" (e.g. "users" → "user")</li>
+	 *   <li>anything else → unchanged</li>
+	 * </ul>
+	 * Words that end in "s" but are not plurals (e.g. "status", "news", "series") are left unchanged.
+	 */
+	static String toSingular(String name) {
+	    if (name == null || name.isEmpty()) return name;
+	    String lower = name.toLowerCase();
+	    // "ies" → "y" (e.g. "categories" → "category")
+	    // Exclude words like "series" and "species" where "ies" form is already singular/invariant
+	    if (lower.endsWith("ies") && !lower.equals("series") && !lower.equals("species")) {
+	        char replacementChar = Character.isUpperCase(name.charAt(name.length() - 3)) ? 'Y' : 'y';
+	        return name.substring(0, name.length() - 3) + replacementChar;
+	    }
+	    // "ses"/"xes"/"zes"/"ches"/"shes" → remove "es" (e.g. "boxes" → "box", "matches" → "match")
+	    if (lower.endsWith("ses") || lower.endsWith("xes") || lower.endsWith("zes")
+	            || lower.endsWith("ches") || lower.endsWith("shes")) {
+	        return name.substring(0, name.length() - 2);
+	    }
+	    // plain "s" → remove it, but skip words that naturally end in "s" without being plural
+	    if (lower.endsWith("s") && !lower.endsWith("ss") && !lower.endsWith("us")
+	            && !lower.endsWith("is") && !lower.endsWith("ous")) {
+	        return name.substring(0, name.length() - 1);
+	    }
+	    return name;
 	}
 
 	public void attachListeners() throws SQLObjectException {
@@ -602,7 +635,8 @@ public class SQLRelationship extends SQLObject implements java.io.Serializable {
 				for (SQLColumn pkCol : pkColListCopy) {
 					if (!pkCol.isPrimaryKey()) break;
 
-					String preferredFkColName = pkCol.getParent().getName() + "_" + pkCol.getName();
+					String singularTableName = toSingular(pkCol.getParent().getName());
+					String preferredFkColName = singularTableName + "_" + pkCol.getName();
 					SQLColumn match = fkTable.getColumnByName(preferredFkColName);
 					SQLColumn fkCol = new SQLColumn(pkCol);
                     if (getParent() == fkTable) {
@@ -1928,40 +1962,107 @@ public class SQLRelationship extends SQLObject implements java.io.Serializable {
 	public static SQLRelationship createRelationship(SQLTable pkTable, SQLTable fkTable, boolean identifying)
             throws SQLObjectException {
         SQLRelationship model = new SQLRelationship();
-        // XXX: need to ensure uniqueness of setName(), but 
-        // to_identifier should take care of this...		
+        // XXX: need to ensure uniqueness of setName(), but
+        // to_identifier should take care of this...
+        StringBuilder sb = buildRelationshipName(pkTable, fkTable);
+        model.setName(sb.toString());
+        model.getForeignKey().setName(sb.toString());
+        model.setIdentifying(identifying);
+        model.attachRelationship(pkTable, fkTable, true);
+        return model;
+    }
+
+    /**
+     * Creates a relationship from pkTable to fkTable but maps the first PK
+     * column to an already-existing FK column rather than auto-generating one.
+     * Use this when the user explicitly picks an existing field to act as the
+     * foreign key.
+     *
+     * @param pkTable     The parent (PK side) table.
+     * @param fkTable     The child (FK side) table.
+     * @param fkColumn    An existing column in fkTable to use as the foreign key.
+     * @param identifying Whether this is an identifying relationship.
+     */
+    public static SQLRelationship createRelationshipToColumn(SQLTable pkTable, SQLTable fkTable,
+            SQLColumn fkColumn, boolean identifying) throws SQLObjectException {
+        SQLRelationship model = new SQLRelationship();
+        StringBuilder sb = buildRelationshipName(pkTable, fkTable);
+        model.setName(sb.toString());
+        model.getForeignKey().setName(sb.toString());
+        model.setIdentifying(identifying);
+        model.setFkTable(fkTable);
+        try {
+            model.setMagicEnabled(false);
+            model.setParent(pkTable);
+        } finally {
+            model.setMagicEnabled(true);
+        }
+        model.attachRelationshipWithColumn(fkColumn);
+        return model;
+    }
+
+    /**
+     * Builds and deduplicates the relationship name "pkTable_fkTable_fk".
+     */
+    private static StringBuilder buildRelationshipName(SQLTable pkTable, SQLTable fkTable) {
         StringBuilder sb = new StringBuilder();
         if (pkTable.getPhysicalName() == null || pkTable.getPhysicalName().trim().equals("")) {
-        	sb.append(pkTable.getName());
+            sb.append(pkTable.getName());
         } else {
-        	sb.append(pkTable.getPhysicalName());
+            sb.append(pkTable.getPhysicalName());
         }
         sb.append("_");
         if (fkTable.getPhysicalName() == null || fkTable.getPhysicalName().trim().equals("")) {
-        	sb.append(fkTable.getName());
+            sb.append(fkTable.getName());
         } else {
-        	sb.append(fkTable.getPhysicalName());
+            sb.append(fkTable.getPhysicalName());
         }
         sb.append("_fk");
         Set<String> rel = new HashSet<String>();
         SPObject tableParent = pkTable.getParent();
-        for(SQLTable tbl : tableParent.getChildren(SQLTable.class)) {
-        	for(SQLRelationship r : tbl.getChildren(SQLRelationship.class)) {
-        		rel.add(r.getPhysicalName());
-        	}
+        for (SQLTable tbl : tableParent.getChildren(SQLTable.class)) {
+            for (SQLRelationship r : tbl.getChildren(SQLRelationship.class)) {
+                rel.add(r.getPhysicalName());
+            }
         }
         if (rel.contains(sb.toString())) {
-        	int i = 1;
-        	while (rel.contains(sb.toString() + Integer.toString(i))) {
-        		i++;
-        	}
-        	sb.append(i);
+            int i = 1;
+            while (rel.contains(sb.toString() + Integer.toString(i))) {
+                i++;
+            }
+            sb.append(i);
         }
-        model.setName(sb.toString());
-        model.getForeignKey().setName(sb.toString());
-        model.setIdentifying(identifying);
-        model.attachRelationship(pkTable,fkTable,true);
-        return model;
+        return sb;
+    }
+
+    /**
+     * Attaches this relationship to its already-configured pkTable and fkTable,
+     * mapping the first PK column to the given existing FK column instead of
+     * auto-generating a new column.
+     */
+    private void attachRelationshipWithColumn(SQLColumn fkColumn) throws SQLObjectException {
+        if (getParent() == null) throw new NullPointerException("Null pkTable not allowed");
+        SQLTable fkTable = getFkTable();
+        if (fkTable == null) throw new NullPointerException("Null fkTable not allowed");
+
+        detachListeners();
+
+        getParent().addChild(this);
+        fkTable.addChild(foreignKey);
+
+        try {
+            fkTable.setMagicEnabled(false);
+            // Map the first PK column to the caller-supplied existing FK column
+            for (SQLColumn pkCol : getParent().getColumns()) {
+                if (!pkCol.isPrimaryKey()) break;
+                this.addMapping(pkCol, fkColumn);
+                break; // one-to-one: first PK col → specified FK col
+            }
+            realizeMapping();
+            this.attachListeners();
+        } finally {
+            fkTable.setMagicEnabled(true);
+        }
     }
 
     @Mutator
